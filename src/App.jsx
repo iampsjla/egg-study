@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { initializeApp, getApps } from 'firebase/app';
 import { 
-  getAuth, onAuthStateChanged, signOut, signInAnonymously,
+  getAuth, onAuthStateChanged, signOut, 
   signInWithEmailAndPassword, createUserWithEmailAndPassword
 } from 'firebase/auth';
 import { 
@@ -13,7 +13,7 @@ import {
 
 // --- 1. 強化版 Firebase 初始化 ---
 const getFirebaseConfig = () => {
-  // 優先檢查 Canvas 預覽環境變數 (由環境注入)
+  // 優先檢查環境注入的變數
   try {
     if (typeof __firebase_config !== 'undefined' && __firebase_config) {
       return JSON.parse(__firebase_config);
@@ -21,16 +21,12 @@ const getFirebaseConfig = () => {
   } catch (e) {}
 
   // 讀取 Vite 環境變數 (.env)
-  // 透過 try-catch 處理，以防在不支援 import.meta 的舊型編譯環境中出現錯誤
   let env = {};
   try {
-    // 檢查 import.meta 是否存在且包含 env
     if (typeof import.meta !== 'undefined' && import.meta.env) {
       env = import.meta.env;
     }
-  } catch (e) {
-    // 環境不支援 import.meta，保持 env 為空物件
-  }
+  } catch (e) {}
 
   return { 
     apiKey: env.VITE_FIREBASE_API_KEY || "", 
@@ -44,7 +40,7 @@ const getFirebaseConfig = () => {
 
 const config = getFirebaseConfig();
 
-// 只有在 API Key 存在時才初始化，避免 Null 錯誤
+// 初始化 Firebase
 let app, auth, db;
 if (config.apiKey && config.apiKey !== "") {
   try {
@@ -74,7 +70,6 @@ const App = () => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [authMode, setAuthMode] = useState('login');
-  const [gameState, setGameState] = useState('explore');
 
   // 監聽登入狀態
   useEffect(() => {
@@ -86,6 +81,7 @@ const App = () => {
     const unsubAuth = onAuthStateChanged(auth, (u) => {
       setUser(u);
       if (u) {
+        // 取得玩家資料
         const userDocRef = doc(db, 'artifacts', appId, 'users', u.uid, 'profile', 'gameData');
         const unsubDoc = onSnapshot(userDocRef, (snap) => {
           if (snap.exists()) {
@@ -96,4 +92,119 @@ const App = () => {
           }
           setLoading(false);
         }, (err) => {
-          console.error(err);
+          console.error("Firestore Error:", err);
+          setLoading(false);
+        });
+        return () => unsubDoc();
+      } else {
+        setPlayer(null);
+        setLoading(false);
+      }
+    });
+
+    return () => unsubAuth();
+  }, []);
+
+  const handleAuth = async (e) => {
+    e.preventDefault();
+    if (!auth) return;
+    setLoading(true);
+    setAuthError('');
+    try {
+      if (authMode === 'login') {
+        await signInWithEmailAndPassword(auth, email, password);
+      } else {
+        await createUserWithEmailAndPassword(auth, email, password);
+      }
+    } catch (err) {
+      setAuthError("認證失敗: " + err.message);
+      setLoading(false);
+    }
+  };
+
+  // 1. 如果 Firebase 設定缺失
+  if (configMissing) return (
+    <div className="min-h-screen bg-red-50 flex items-center justify-center p-6 text-center">
+      <div className="bg-white p-8 rounded-3xl shadow-xl border-4 border-red-100 max-w-sm w-full">
+        <AlertCircle size={48} className="text-red-500 mx-auto mb-4" />
+        <h2 className="text-xl font-black text-slate-800 mb-2">Firebase 未設定</h2>
+        <p className="text-sm text-slate-500 mb-6">請檢查您的 .env 檔案並確保執行了 npm run deploy。</p>
+        <div className="text-[10px] bg-slate-100 p-2 rounded text-left overflow-auto font-mono">
+           API KEY: {config.apiKey ? "已填寫" : "未偵測到"}
+        </div>
+      </div>
+    </div>
+  );
+
+  // 2. 讀取中
+  if (loading) return (
+    <div className="min-h-screen bg-yellow-50 flex items-center justify-center font-bold text-yellow-600">
+      載入中...
+    </div>
+  );
+
+  // 3. 登入/註冊畫面
+  if (!user) return (
+    <div className="min-h-screen bg-yellow-50 flex items-center justify-center p-6">
+      <div className="w-full max-w-md bg-white rounded-3xl shadow-xl p-8 border-4 border-white">
+        <h1 className="text-2xl font-black text-center mb-6 text-slate-800">蛋仔大冒險</h1>
+        {authError && (
+          <div className="mb-4 p-3 bg-red-50 text-red-600 text-xs rounded-lg flex items-center gap-2">
+            <AlertCircle size={14}/> {authError}
+          </div>
+        )}
+        <form onSubmit={handleAuth} className="space-y-4">
+          <input 
+            type="email" placeholder="電子信箱" 
+            value={email} onChange={e=>setEmail(e.target.value)} 
+            className="w-full p-3 bg-slate-50 rounded-xl border outline-none focus:border-yellow-400" 
+            required 
+          />
+          <input 
+            type="password" placeholder="密碼" 
+            value={password} onChange={e=>setPassword(e.target.value)} 
+            className="w-full p-3 bg-slate-50 rounded-xl border outline-none focus:border-yellow-400" 
+            required 
+          />
+          <button className="w-full py-3 bg-yellow-400 text-white font-bold rounded-xl shadow-md transition active:scale-95">
+            {authMode === 'login' ? '登入遊戲' : '註冊帳號'}
+          </button>
+        </form>
+        <button 
+          onClick={() => setAuthMode(m => m === 'login' ? 'signup' : 'login')} 
+          className="w-full mt-4 text-xs text-yellow-600 underline"
+        >
+          {authMode === 'login' ? '還沒有帳號？點此註冊' : '已有帳號？返回登入'}
+        </button>
+      </div>
+    </div>
+  );
+
+  // 4. 遊戲主畫面 (連線成功後)
+  return (
+    <div className="min-h-screen bg-sky-50 p-4 flex flex-col items-center">
+      <div className="w-full max-w-md bg-white rounded-2xl p-4 mb-4 flex justify-between items-center shadow-sm">
+        <div className="flex gap-4 text-xs font-bold">
+          <span className="flex items-center gap-1"><Heart size={14} className="text-red-500"/> {player?.hp}</span>
+          <span className="flex items-center gap-1"><Coins size={14} className="text-yellow-500"/> {player?.gold}</span>
+        </div>
+        <button onClick={() => signOut(auth)} className="text-slate-400 hover:text-red-500 transition">
+          <LogOut size={18}/>
+        </button>
+      </div>
+      
+      <div className="w-full max-w-md bg-white rounded-3xl shadow-lg p-8 min-h-[400px] flex flex-col items-center justify-center text-center">
+        <div className="w-20 h-20 bg-yellow-100 rounded-full flex items-center justify-center mb-6">
+          <MapIcon size={40} className="text-yellow-500" />
+        </div>
+        <h2 className="text-2xl font-black text-slate-800 mb-2">連線成功！</h2>
+        <p className="text-slate-500 text-sm">歡迎回來，蛋仔冒險者。您的資料已成功從雲端同步。</p>
+        <button className="mt-8 px-8 py-3 bg-sky-500 text-white font-bold rounded-full shadow-lg active:scale-95 transition">
+          開始冒險
+        </button>
+      </div>
+    </div>
+  );
+};
+
+export default App;
